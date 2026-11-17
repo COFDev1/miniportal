@@ -3,7 +3,7 @@ const API_URL = "https://purple-resonance-193c.raspy-pond-9283.workers.dev";
 
 // MODO DE TESTE: true inicia diretamente na tela de pedidos, sem login/API.
 // Ao retomar o fluxo real, altere para false.
-const MODO_TESTE = true;
+const MODO_TESTE = false;
 
 const CLIENTE_TESTE = {
   name: 'Cliente de Teste',
@@ -266,10 +266,10 @@ function telaPedidos() {
         </div>
 
         ${estado.pedidos.length === 0
-          ? `<div class="text-muted text-center py-4">Não há pedidos.</div>`
-          : filtrados.length === 0
-            ? `<div class="text-muted text-center py-4">Nenhum pedido encontrado para essa pesquisa.</div>`
-            : `<div class="list-group list-group-flush">
+      ? `<div class="text-muted text-center py-4">Não há pedidos.</div>`
+      : filtrados.length === 0
+        ? `<div class="text-muted text-center py-4">Nenhum pedido encontrado para essa pesquisa.</div>`
+        : `<div class="list-group list-group-flush">
                 ${filtrados.map(p => `
                   <div class="list-group-item pedido-item px-0">
                     <div class="d-flex justify-content-between align-items-start gap-3">
@@ -284,7 +284,7 @@ function telaPedidos() {
                   </div>
                 `).join('')}
               </div>`
-        }
+    }
       </div>
     </div>
   `;
@@ -611,7 +611,7 @@ function interpretarLinhasPlanilha(linhas) {
     const quantidadeOriginal = linha[indiceQuantidade];
 
     if (String(skuOriginal ?? '').trim() === '' &&
-        String(quantidadeOriginal ?? '').trim() === '') {
+      String(quantidadeOriginal ?? '').trim() === '') {
       continue;
     }
 
