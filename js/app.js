@@ -25,7 +25,8 @@ const estado = {
     arquivo: null,
     itens: [],
     erros: [],
-    processada: false
+    processada: false,
+    pedidoGerado: null
   }
 };
 
@@ -421,17 +422,33 @@ function renderResultadoImportacao() {
     `
     : `<div class="alert alert-success">Planilha lida sem inconsistências.</div>`;
 
+  const pedidoGerado = imp.pedidoGerado
+    ? `
+      <div class="alert alert-success mt-3 mb-3">
+        <div class="fw-semibold"><i class="bi bi-check-circle me-1"></i> Pedido de teste gerado!</div>
+        <div>Número: <strong>${escapeHtml(imp.pedidoGerado.id)}</strong></div>
+        <div class="small">O pedido foi incluído na lista desta sessão. Nenhum dado foi gravado no Protheus.</div>
+      </div>
+    `
+    : '';
+
+  const podeGerar = imp.itens.length > 0 && imp.erros.length === 0 && !imp.pedidoGerado;
+
   return `
     ${resumo}
     ${tabela}
     ${erros}
-    <div class="d-flex justify-content-end">
+    ${pedidoGerado}
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
       <button class="btn btn-outline-primary" id="btnNovaPlanilha">
         <i class="bi bi-arrow-repeat me-1"></i> Selecionar outra planilha
       </button>
+      <button class="btn btn-success" id="btnGerarPedido" ${podeGerar ? '' : 'disabled'}>
+        <i class="bi bi-check2-circle me-1"></i> ${imp.pedidoGerado ? 'Pedido gerado' : 'Gerar pedido (teste)'}
+      </button>
     </div>
     <div class="form-text mt-3">
-      Esta etapa apenas lê e apresenta os dados. Nenhum pedido foi enviado ao Protheus.
+      A geração é simulada nesta versão. Nenhum pedido é enviado ou gravado no Protheus.
     </div>
   `;
 }
@@ -443,6 +460,7 @@ function bindTelaImportacao() {
     if (arquivo) processarPlanilha(arquivo);
   });
   document.getElementById('btnNovaPlanilha')?.addEventListener('click', limparImportacao);
+  document.getElementById('btnGerarPedido')?.addEventListener('click', gerarPedidoTeste);
 }
 
 function abrirImportacao() {
@@ -450,7 +468,8 @@ function abrirImportacao() {
     arquivo: null,
     itens: [],
     erros: [],
-    processada: false
+    processada: false,
+    pedidoGerado: null
   };
   estado.tela = 'importacao';
   render();
@@ -466,7 +485,8 @@ function limparImportacao() {
     arquivo: null,
     itens: [],
     erros: [],
-    processada: false
+    processada: false,
+    pedidoGerado: null
   };
   render();
 }
@@ -478,7 +498,8 @@ async function processarPlanilha(arquivo) {
       arquivo: arquivo.name,
       itens: [],
       erros: ['O arquivo ultrapassa o limite de 5 MB.'],
-      processada: true
+      processada: true,
+      pedidoGerado: null
     };
     render();
     return;
@@ -490,7 +511,8 @@ async function processarPlanilha(arquivo) {
       arquivo: arquivo.name,
       itens: [],
       erros: ['Formato de arquivo não suportado. Selecione XLSX, XLS ou CSV.'],
-      processada: true
+      processada: true,
+      pedidoGerado: null
     };
     render();
     return;
@@ -500,6 +522,7 @@ async function processarPlanilha(arquivo) {
     estado.importacao.erros = ['Não foi possível carregar a biblioteca de leitura de planilhas. Atualize a página e tente novamente.'];
     estado.importacao.arquivo = arquivo.name;
     estado.importacao.processada = true;
+    estado.importacao.pedidoGerado = null;
     render();
     return;
   }
@@ -508,7 +531,8 @@ async function processarPlanilha(arquivo) {
     arquivo: arquivo.name,
     itens: [],
     erros: [],
-    processada: false
+    processada: false,
+    pedidoGerado: null
   };
   render();
 
@@ -534,7 +558,8 @@ async function processarPlanilha(arquivo) {
       arquivo: arquivo.name,
       itens: resultado.itens,
       erros: resultado.erros,
-      processada: true
+      processada: true,
+      pedidoGerado: null
     };
     render();
 
@@ -543,7 +568,8 @@ async function processarPlanilha(arquivo) {
       arquivo: arquivo.name,
       itens: [],
       erros: [`Não foi possível ler a planilha: ${err.message}`],
-      processada: true
+      processada: true,
+      pedidoGerado: null
     };
     render();
   }
@@ -618,6 +644,28 @@ function interpretarLinhasPlanilha(linhas) {
     itens: Array.from(itensMap.values()),
     erros
   };
+}
+
+// ===== GERAÇÃO SIMULADA DO PEDIDO =====
+function gerarPedidoTeste() {
+  const imp = estado.importacao;
+
+  // Evita gerar mais de um pedido para a mesma importação.
+  if (imp.pedidoGerado || !imp.processada || !imp.itens.length || imp.erros.length) {
+    return;
+  }
+
+  const sequencia = estado.pedidos.length + 1;
+  const numero = `TESTE-${String(sequencia).padStart(4, '0')}`;
+
+  estado.pedidos.unshift({
+    id: numero,
+    descricao: `Pedido de teste (${imp.itens.length} SKU(s))`,
+    tipo: 'Venda - Teste'
+  });
+
+  imp.pedidoGerado = { id: numero, itens: imp.itens.length };
+  render();
 }
 
 // ===== NAVEGAÇÃO =====
