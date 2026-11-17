@@ -4,6 +4,8 @@ const API_URL = "https://purple-resonance-193c.raspy-pond-9283.workers.dev";
 // MODO DE TESTE: true inicia diretamente na tela de pedidos, sem login/API.
 // Ao retomar o fluxo real, altere para false.
 const MODO_TESTE = false;
+const PAGINA = document.body.dataset.pagina;
+const CHAVE_CLIENTE = 'portalCliente';
 
 const CLIENTE_TESTE = {
   name: 'Cliente de Teste',
@@ -17,9 +19,9 @@ const PEDIDOS_TESTE = [
 
 // ===== ESTADO =====
 const estado = {
-  tela: MODO_TESTE ? 'pedidos' : 'cpf',
-  cliente: MODO_TESTE ? CLIENTE_TESTE : null,
-  pedidos: MODO_TESTE ? PEDIDOS_TESTE : [],
+  tela: PAGINA === 'pedidos' ? 'importacao' : 'cpf',
+  cliente: null,
+  pedidos: [],
   filtro: '',
   importacao: {
     arquivo: null,
@@ -191,9 +193,12 @@ async function validarCliente(documento) {
       return;
     }
 
-    estado.cliente = data.cliente;
-    estado.tela = 'pedidos';
-    await carregarPedidos();
+    const cliente = {
+      name: String(data.cliente.name ?? ''),
+      documento: docLimpo
+    };
+    sessionStorage.setItem(CHAVE_CLIENTE, JSON.stringify(cliente));
+    window.location.assign('pedidos.html');
 
   } catch (err) {
     app.innerHTML = `
@@ -266,10 +271,10 @@ function telaPedidos() {
         </div>
 
         ${estado.pedidos.length === 0
-      ? `<div class="text-muted text-center py-4">Não há pedidos.</div>`
-      : filtrados.length === 0
-        ? `<div class="text-muted text-center py-4">Nenhum pedido encontrado para essa pesquisa.</div>`
-        : `<div class="list-group list-group-flush">
+          ? `<div class="text-muted text-center py-4">Não há pedidos.</div>`
+          : filtrados.length === 0
+            ? `<div class="text-muted text-center py-4">Nenhum pedido encontrado para essa pesquisa.</div>`
+            : `<div class="list-group list-group-flush">
                 ${filtrados.map(p => `
                   <div class="list-group-item pedido-item px-0">
                     <div class="d-flex justify-content-between align-items-start gap-3">
@@ -284,7 +289,7 @@ function telaPedidos() {
                   </div>
                 `).join('')}
               </div>`
-    }
+        }
       </div>
     </div>
   `;
@@ -332,8 +337,8 @@ function telaImportacao() {
             <h5 class="mb-1 fw-bold">Importar pedido</h5>
             <div class="text-muted small">Selecione uma planilha com SKU e Quantidade.</div>
           </div>
-          <button class="btn btn-sm btn-outline-secondary" id="btnVoltarPedidos">
-            Voltar aos pedidos
+          <button class="btn btn-sm btn-outline-secondary" id="btnSairImportacao">
+            <i class="bi bi-box-arrow-left me-1"></i> Sair
           </button>
         </div>
 
@@ -427,7 +432,7 @@ function renderResultadoImportacao() {
       <div class="alert alert-success mt-3 mb-3">
         <div class="fw-semibold"><i class="bi bi-check-circle me-1"></i> Pedido de teste gerado!</div>
         <div>Número: <strong>${escapeHtml(imp.pedidoGerado.id)}</strong></div>
-        <div class="small">O pedido foi incluído na lista desta sessão. Nenhum dado foi gravado no Protheus.</div>
+        <div class="small">Pedido simulado nesta sessão. Nenhum dado foi gravado no Protheus.</div>
       </div>
     `
     : '';
@@ -454,7 +459,7 @@ function renderResultadoImportacao() {
 }
 
 function bindTelaImportacao() {
-  document.getElementById('btnVoltarPedidos')?.addEventListener('click', voltarPedidos);
+  document.getElementById('btnSairImportacao')?.addEventListener('click', voltarCPF);
   document.getElementById('arquivoPlanilha')?.addEventListener('change', (e) => {
     const arquivo = e.target.files?.[0];
     if (arquivo) processarPlanilha(arquivo);
@@ -611,7 +616,7 @@ function interpretarLinhasPlanilha(linhas) {
     const quantidadeOriginal = linha[indiceQuantidade];
 
     if (String(skuOriginal ?? '').trim() === '' &&
-      String(quantidadeOriginal ?? '').trim() === '') {
+        String(quantidadeOriginal ?? '').trim() === '') {
       continue;
     }
 
@@ -655,14 +660,9 @@ function gerarPedidoTeste() {
     return;
   }
 
-  const sequencia = estado.pedidos.length + 1;
+  const sequencia = Number(sessionStorage.getItem('sequenciaPedidoTeste') || '0') + 1;
+  sessionStorage.setItem('sequenciaPedidoTeste', String(sequencia));
   const numero = `TESTE-${String(sequencia).padStart(4, '0')}`;
-
-  estado.pedidos.unshift({
-    id: numero,
-    descricao: `Pedido de teste (${imp.itens.length} SKU(s))`,
-    tipo: 'Venda - Teste'
-  });
 
   imp.pedidoGerado = { id: numero, itens: imp.itens.length };
   render();
@@ -670,6 +670,9 @@ function gerarPedidoTeste() {
 
 // ===== NAVEGAÇÃO =====
 function voltarCPF() {
+  sessionStorage.removeItem(CHAVE_CLIENTE);
+  window.location.assign('index.html');
+  return;
   estado.tela = 'cpf';
   estado.cliente = null;
   estado.pedidos = [];
@@ -684,4 +687,20 @@ function voltarCPF() {
 }
 
 // ===== INICIALIZA =====
-render();
+if (PAGINA === 'pedidos') {
+  try {
+    const cliente = JSON.parse(sessionStorage.getItem(CHAVE_CLIENTE) || 'null');
+    if (!cliente || !/^(?:\d{11}|\d{14})$/.test(String(cliente.documento ?? ''))) {
+      window.location.replace('index.html');
+    } else {
+      estado.cliente = cliente;
+      estado.tela = 'importacao';
+      render();
+    }
+  } catch (_) {
+    sessionStorage.removeItem(CHAVE_CLIENTE);
+    window.location.replace('index.html');
+  }
+} else {
+  render();
+}
