@@ -1,16 +1,12 @@
 // Importação de pedidos: página independente.
 const CHAVE_CLIENTE = 'portalCliente';
-const CHAVE_PEDIDOS = 'portalPedidosTeste';
 const estado = {
   cliente: null,
-  pedidos: [],
   importacao: { arquivo: null, itens: [], erros: [], processada: false, pedidoGerado: null }
 };
 try { estado.cliente = JSON.parse(sessionStorage.getItem(CHAVE_CLIENTE) || 'null'); } catch (_) {}
-try {
-  const salvos = JSON.parse(sessionStorage.getItem(CHAVE_PEDIDOS) || '[]');
-  estado.pedidos = Array.isArray(salvos) ? salvos : [];
-} catch (_) { estado.pedidos = []; }
+// Apenas navegação: autorização real deve ocorrer no Worker/Protheus.
+if (!estado.cliente) window.location.replace('index.html');
 
 // ===== UTILITÁRIOS =====
 function escapeHtml(valor) {
@@ -80,7 +76,6 @@ function telaImportacao() {
   const imp = estado.importacao;
 
   return `
-    ${renderListaPedidos()}
     <div class="card card-consulta mb-3">
       <div class="card-body p-4">
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
@@ -109,7 +104,7 @@ function telaImportacao() {
           <label for="arquivoPlanilha" class="form-label fw-semibold">Arquivo da planilha</label>
           <input class="form-control" type="file" id="arquivoPlanilha"
                  accept=".xlsx,.xls,.csv">
-          <div class="form-text">Formatos aceitos: XLSX, XLS e CSV. Tamanho máximo: 5 MB.</div>
+          <div class="form-text">Formatos aceitos: XLSX, XLS e CSV. Tamanho máximo: 10 MB. Selecione apenas um arquivo por vez.</div>
         </div>
 
         ${imp.arquivo ? `
@@ -124,30 +119,6 @@ function telaImportacao() {
             A pré-visualização dos produtos aparecerá aqui.
           </div>
         `}
-      </div>
-    </div>
-  `;
-}
-
-function renderListaPedidos() {
-  const pedidos = estado.pedidos;
-  return `
-    <div class="card card-consulta mb-3">
-      <div class="card-body p-4">
-        <h5 class="fw-bold mb-3"><i class="bi bi-list-check me-2"></i>Pedidos gerados (teste)</h5>
-        ${pedidos.length ? `
-          <div class="table-responsive">
-            <table class="table table-sm table-hover align-middle mb-0">
-              <thead class="table-light"><tr><th>Pedido</th><th>SKUs</th><th>Quantidade total</th><th>Arquivo</th></tr></thead>
-              <tbody>${pedidos.map(pedido => `
-                <tr>
-                  <td class="fw-semibold">${escapeHtml(pedido.id)}</td>
-                  <td>${pedido.itens}</td>
-                  <td>${formatarQuantidade(pedido.quantidade)}</td>
-                  <td>${escapeHtml(pedido.arquivo)}</td>
-                </tr>`).join('')}</tbody>
-            </table>
-          </div>` : '<p class="text-muted small mb-0">Nenhum pedido gerado nesta sessão.</p>'}
       </div>
     </div>
   `;
@@ -233,17 +204,26 @@ function renderResultadoImportacao() {
   `;
 }
 
+let versaoImportacao = 0;
+
 function bindTelaImportacao() {
   document.getElementById('btnRetornar')?.addEventListener('click', retornarLogin);
   document.getElementById('arquivoPlanilha')?.addEventListener('change', (e) => {
-    const arquivo = e.target.files?.[0];
-    if (arquivo) processarPlanilha(arquivo);
+    const arquivos = e.target.files;
+    if (!arquivos?.length) return;
+    if (arquivos.length !== 1) {
+      limparImportacao();
+      alert('Selecione apenas uma planilha por vez.');
+      return;
+    }
+    processarPlanilha(arquivos[0]);
   });
   document.getElementById('btnNovaPlanilha')?.addEventListener('click', limparImportacao);
   document.getElementById('btnGerarPedido')?.addEventListener('click', gerarPedidoTeste);
 }
 
 function abrirImportacao() {
+  versaoImportacao++;
   estado.importacao = {
     arquivo: null,
     itens: [],
@@ -255,6 +235,7 @@ function abrirImportacao() {
 }
 
 function limparImportacao() {
+  versaoImportacao++;
   estado.importacao = {
     arquivo: null,
     itens: [],
@@ -266,12 +247,13 @@ function limparImportacao() {
 }
 
 async function processarPlanilha(arquivo) {
-  const maxBytes = 5 * 1024 * 1024;
+  const versaoAtual = ++versaoImportacao;
+  const maxBytes = 10 * 1024 * 1024;
   if (arquivo.size > maxBytes) {
     estado.importacao = {
       arquivo: arquivo.name,
       itens: [],
-      erros: ['O arquivo ultrapassa o limite de 5 MB.'],
+      erros: ['O arquivo ultrapassa o limite de 10 MB.'],
       processada: true,
       pedidoGerado: null
     };
@@ -312,6 +294,7 @@ async function processarPlanilha(arquivo) {
 
   try {
     const buffer = await arquivo.arrayBuffer();
+    if (versaoAtual !== versaoImportacao) return;
     const workbook = XLSX.read(buffer, { type: 'array' });
 
     if (!workbook.SheetNames.length) {
@@ -328,6 +311,7 @@ async function processarPlanilha(arquivo) {
 
     const resultado = interpretarLinhasPlanilha(linhas);
 
+    if (versaoAtual !== versaoImportacao) return;
     estado.importacao = {
       arquivo: arquivo.name,
       itens: resultado.itens,
@@ -338,6 +322,7 @@ async function processarPlanilha(arquivo) {
     render();
 
   } catch (err) {
+    if (versaoAtual !== versaoImportacao) return;
     estado.importacao = {
       arquivo: arquivo.name,
       itens: [],
@@ -429,19 +414,7 @@ function gerarPedidoTeste() {
     return;
   }
 
-  const sequencia = Number(sessionStorage.getItem('sequenciaPedidoTeste') || '0') + 1;
-  sessionStorage.setItem('sequenciaPedidoTeste', String(sequencia));
-  const numero = `TESTE-${String(sequencia).padStart(4, '0')}`;
-
-  const pedido = {
-    id: numero,
-    itens: imp.itens.length,
-    quantidade: imp.itens.reduce((total, item) => total + item.quantidade, 0),
-    arquivo: imp.arquivo || '',
-    produtos: imp.itens.map(item => ({ sku: item.sku, quantidade: item.quantidade }))
-  };
-  estado.pedidos.unshift(pedido);
-  sessionStorage.setItem(CHAVE_PEDIDOS, JSON.stringify(estado.pedidos));
+  const numero = `TESTE-${Date.now()}`;
   imp.pedidoGerado = { id: numero, itens: imp.itens.length };
   render();
 }
