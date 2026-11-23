@@ -12,7 +12,7 @@ function json(data, status = 200, headers = {}) {
 function b64url(bytes) { return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
 function fromB64url(value) { const s = value.replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(s + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0)); }
 function safeEq(a, b) { if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i]; return d === 0; }
-async function hmacKey(secret) { return crypto.subtle.importKey('raw', enc.encode(secret), 'HMAC', false, ['sign']); }
+async function hmacKey(secret) { return crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); }
 async function signSession(payload, secret) {
   const p = b64url(enc.encode(JSON.stringify(payload)));
   const sig = new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(secret), enc.encode(p)));
@@ -60,7 +60,7 @@ async function readJson(request, max = MAX_BODY) {
 }
 async function backend(url, options) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try { return await fetch(url, { ...options, signal: controller.signal, redirect: 'manual', cf: { cacheTtl: 0, cacheEverything: false } }); }
   finally { clearTimeout(timeout); }
 }
@@ -68,8 +68,7 @@ async function backend(url, options) {
 // A versão atual do Protheus informada utiliza parâmetros na query string.
 // Não registrar a URL completa, pois ela contém credenciais.
 const TOKEN_CACHE_KEY = 'protheus:technical-token:v2';
-let memoryToken = null; // cache por isolate, não é persistente entre instâncias.
-let pendingToken = null; // evita solicitações duplicadas dentro do mesmo isolate.
+let memoryToken = null; // Apenas dados resolvidos: nunca compartilhar Promises entre requisições.
 
 function usable(record) {
   return record && typeof record.access_token === 'string' &&
@@ -82,9 +81,6 @@ async function requestPasswordToken(env) {
     grant_type: 'password', username: env.PROTHEUS_USER, password: env.PROTHEUS_PASS
   }).toString();
 
-  console.log("URL de Destino 1:", url.search);
-  //url.toString()
-  console.log("URL de Destino 2:", url.toString());
 
   // Nunca enviar Basic Auth. O token é obtido com OAuth2 password grant.
   const response = await backend(url.toString(), {
@@ -102,23 +98,18 @@ async function requestPasswordToken(env) {
 }
 async function technicalToken(env, force = false) {
   if (!force && usable(memoryToken)) return memoryToken.access_token;
-  if (pendingToken) return pendingToken;
-  pendingToken = (async () => {
-    if (!force && env.TOKEN_KV) {
-      const cached = await env.TOKEN_KV.get(TOKEN_CACHE_KEY, 'json');
-      if (usable(cached)) { memoryToken = cached; return cached.access_token; }
-    }
-    const record = await requestPasswordToken(env);
-    memoryToken = record;
-    if (env.TOKEN_KV) {
-      // KV expira antes do token; o token permanece apenas no Worker/KV.
-      const ttl = Math.floor((record.expires_at - Date.now()) / 1000) - 60;
-      if (ttl >= 60) await env.TOKEN_KV.put(TOKEN_CACHE_KEY, JSON.stringify(record), { expirationTtl: ttl });
-    }
-    return record.access_token;
-  })();
-  try { return await pendingToken; }
-  finally { pendingToken = null; }
+  if (!force && env.TOKEN_KV) {
+    const cached = await env.TOKEN_KV.get(TOKEN_CACHE_KEY, 'json');
+    if (usable(cached)) { memoryToken = cached; return cached.access_token; }
+  }
+  const record = await requestPasswordToken(env);
+  memoryToken = record;
+  if (env.TOKEN_KV) {
+    // KV expira antes do token; o token permanece apenas no Worker/KV.
+    const ttl = Math.floor((record.expires_at - Date.now()) / 1000) - 60;
+    if (ttl >= 60) await env.TOKEN_KV.put(TOKEN_CACHE_KEY, JSON.stringify(record), { expirationTtl: ttl });
+  }
+  return record.access_token;
 }
 async function callProtheus(env, path, body, method = 'POST') {
   let token = await technicalToken(env);
@@ -169,12 +160,13 @@ export default {
       const input = await readJson(request, 16384); if (input.error) return reply(input.error);
       if (!env.PROTHEUS_LOGIN_PATH) return reply(json({ erro: 'Configuração indisponível' }, 503));
       const res = await callProtheus(env, env.PROTHEUS_LOGIN_PATH, input.value);
+      console.log('[LOGIN] Status Protheus:', res.status);
       if (!res.ok) return reply(backendError(res.status));
       const data = await parseBackend(res);
-      // Contract: authenticated backend MUST return a validated unique client id in `clienteId`.
-      // Do not derive identity from user-submitted CPF/CNPJ or username.
-      const sub = data?.clienteId;
-      if (typeof sub !== 'string' || !sub || sub.length > 128) throw new Error('Login contract missing clienteId');
+      if (data?.autenticado !== true) return reply(json({ erro: 'Credenciais inválidas' }, 401));
+      // A identidade vem exclusivamente do retorno autenticado do Protheus.
+      const sub = data?.cliente?.id;
+      if (typeof sub !== 'string' || !sub || sub.length > 128) throw new Error('Login contract missing cliente.id');
       const ttl = Math.min(3600, Math.max(300, Number(env.SESSION_TTL_SECONDS) || DEFAULT_TTL));
       const now = Math.floor(Date.now() / 1000);
       const signed = await signSession({ v: 1, sub, iat: now, exp: now + ttl }, env.SESSION_SECRET);

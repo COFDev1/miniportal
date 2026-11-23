@@ -115,16 +115,20 @@ form.addEventListener('submit', async (event) => {
       throw new Error('Não foi possível autenticar. Tente novamente.');
     }
 
-    // Contrato esperado: HTTP 2xx + { autenticado: true }.
+    // Contrato esperado do Worker: HTTP 2xx + { authenticated: true, cliente: "codigo" }.
     // Não considerar HTTP 200 isoladamente como login válido.
-    if (!dados || dados.autenticado !== true) {
+    if (!dados || dados.authenticated !== true) {
       throw new Error('Resposta de autenticação inesperada. Verifique o contrato da API.');
     }
 
     // Apenas informações de exibição. NÃO é uma credencial nem prova de autenticação.
-    const cliente = dados.cliente && typeof dados.cliente === 'object' ? dados.cliente : {};
+    const codigoCliente = typeof dados.cliente === 'string' ? dados.cliente : '';
+    if (!codigoCliente) {
+      throw new Error('Resposta de autenticação sem identificação do cliente.');
+    }
     sessionStorage.setItem(CHAVE_CLIENTE, JSON.stringify({
-      name: String(cliente.nome ?? cliente.name ?? usuario).slice(0, 100)
+      id: codigoCliente,
+      name: usuario.slice(0, 100)
     }));
     senhaInput.value = '';
     window.location.assign('pedidos.html');
