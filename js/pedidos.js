@@ -1,4 +1,7 @@
 // Importação de pedidos: página independente.
+const API_URL = 'https://purple-resonance-193c.raspy-pond-9283.workers.dev';
+const PEDIDOS_ENDPOINT = '/api/b2b/pedidos';
+let enviandoPedido = false;
 const CHAVE_CLIENTE = 'portalCliente';
 const estado = {
   cliente: null,
@@ -84,10 +87,10 @@ function telaImportacao() {
             <div class="text-muted small">Selecione uma planilha com SKU e Quantidade.</div>
           </div>
           <div class="d-flex align-items-center flex-wrap gap-2">
-            <button class="btn btn-success" id="btnGerarPedido" ${!(imp.processada && imp.itens.length > 0 && imp.erros.length === 0 && !imp.pedidoGerado) ? 'disabled' : ''}>
-              <i class="bi bi-check2-circle me-1"></i> ${imp.pedidoGerado ? 'Pedido gerado' : 'Gerar pedido (teste)'}
+            <button class="btn btn-success" id="btnGerarPedido" ${!(imp.processada && imp.itens.length > 0 && imp.erros.length === 0 && !imp.pedidoGerado && !imp.envioIncerto && !enviandoPedido) ? 'disabled' : ''}>
+              <i class="bi bi-check2-circle me-1"></i> ${imp.pedidoGerado ? 'Pedido gerado' : enviandoPedido ? 'Enviando...' : 'Gerar pedido'}
             </button>
-            <button class="btn btn-sm btn-outline-secondary" id="btnRetornar">
+            <button class="btn btn-sm btn-outline-secondary" id="btnRetornar" ${enviandoPedido ? 'disabled' : ''}>
               <i class="bi bi-arrow-left me-1"></i> Retornar
             </button>
           </div>
@@ -103,7 +106,7 @@ function telaImportacao() {
         <div class="mb-3">
           <label for="arquivoPlanilha" class="form-label fw-semibold">Arquivo da planilha</label>
           <input class="form-control" type="file" id="arquivoPlanilha"
-                 accept=".xlsx,.xls,.csv">
+                 accept=".xlsx,.xls,.csv" ${enviandoPedido ? 'disabled' : ''}>
           <div class="form-text">Formatos aceitos: XLSX, XLS e CSV. Tamanho máximo: 10 MB. Selecione apenas um arquivo por vez.</div>
         </div>
 
@@ -181,9 +184,9 @@ function renderResultadoImportacao() {
   const pedidoGerado = imp.pedidoGerado
     ? `
       <div class="alert alert-success mt-3 mb-3">
-        <div class="fw-semibold"><i class="bi bi-check-circle me-1"></i> Pedido de teste gerado!</div>
+        <div class="fw-semibold"><i class="bi bi-check-circle me-1"></i> Pedido gerado!</div>
         <div>Número: <strong>${escapeHtml(imp.pedidoGerado.id)}</strong></div>
-        <div class="small">Pedido simulado nesta sessão. Nenhum dado foi gravado no Protheus.</div>
+        <div class="small">Pedido confirmado pelo serviço.</div>
       </div>
     `
     : '';
@@ -194,13 +197,11 @@ function renderResultadoImportacao() {
     ${erros}
     ${pedidoGerado}
     <div class="d-flex justify-content-start">
-      <button class="btn btn-outline-primary" id="btnNovaPlanilha">
+      <button class="btn btn-outline-primary" id="btnNovaPlanilha" ${enviandoPedido ? 'disabled' : ''}>
         <i class="bi bi-arrow-repeat me-1"></i> Selecionar outra planilha
       </button>
     </div>
-    <div class="form-text mt-3">
-      A geração é simulada nesta versão. Nenhum pedido é enviado ou gravado no Protheus.
-    </div>
+    ${imp.erroEnvio ? `<div class="alert alert-warning mt-3" role="alert">${escapeHtml(imp.erroEnvio)}</div>` : ''}
   `;
 }
 
@@ -219,7 +220,7 @@ function bindTelaImportacao() {
     processarPlanilha(arquivos[0]);
   });
   document.getElementById('btnNovaPlanilha')?.addEventListener('click', limparImportacao);
-  document.getElementById('btnGerarPedido')?.addEventListener('click', gerarPedidoTeste);
+  document.getElementById('btnGerarPedido')?.addEventListener('click', gerarPedido);
 }
 
 function abrirImportacao() {
@@ -405,18 +406,52 @@ function interpretarLinhasPlanilha(linhas) {
   };
 }
 
-// ===== GERAÇÃO SIMULADA DO PEDIDO =====
-function gerarPedidoTeste() {
+// ===== INCLUSÃO DO PEDIDO =====
+async function gerarPedido() {
   const imp = estado.importacao;
-
-  // Evita gerar mais de um pedido para a mesma importação.
-  if (imp.pedidoGerado || !imp.processada || !imp.itens.length || imp.erros.length) {
+  if (enviandoPedido || imp.envioIncerto || imp.pedidoGerado || !imp.processada || !imp.itens.length || imp.erros.length) return;
+  if (!imp.itens.every(item => item.sku && Number.isFinite(item.quantidade) && item.quantidade > 0)) {
+    imp.erroEnvio = 'Existem quantidades inválidas.';
+    render();
     return;
   }
-
-  const numero = `TESTE-${Date.now()}`;
-  imp.pedidoGerado = { id: numero, itens: imp.itens.length };
+  if (!window.confirm('Confirma o envio do pedido ao Protheus?')) return;
+  enviandoPedido = true;
+  imp.erroEnvio = null;
   render();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  try {
+    const resposta = await fetch(`${API_URL}${PEDIDOS_ENDPOINT}`, {
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      signal: controller.signal,
+      body: JSON.stringify({ itens: imp.itens.map(({ sku, quantidade }) => ({ sku, quantidade })) })
+    });
+    if (resposta.status === 401) {
+      sessionStorage.removeItem(CHAVE_CLIENTE);
+      alert('Sessão não autorizada. Entre novamente e confira se o pedido foi registrado antes de reenviar.');
+      window.location.replace('index.html');
+      return;
+    }
+    const dados = await resposta.json();
+    // Contrato provisório: confirmar com o Controller antes de publicar.
+    if (!resposta.ok || dados.sucesso !== true || typeof dados.numero !== 'string' || !dados.numero.trim()) {
+      throw new Error('Resposta sem confirmação válida do pedido (HTTP ' + resposta.status + ').');
+    }
+    imp.pedidoGerado = { id: dados.numero.trim(), itens: imp.itens.length };
+  } catch (erro) {
+    // Não repetir automaticamente: o ERP pode ter gravado antes da falha.
+    imp.envioIncerto = true;
+    imp.erroEnvio = 'Não foi possível confirmar o resultado. Verifique no Protheus antes de enviar novamente. ' + (erro.name === 'AbortError' ? 'Tempo de resposta excedido.' : erro.message);
+  } finally {
+    clearTimeout(timeout);
+    enviandoPedido = false;
+    render();
+  }
 }
 
 
